@@ -2,7 +2,7 @@
 # This workflow installs Python deps, generates a daily arXiv digest,
 # uploads it as an artifact, and (optionally) e-mails it.
 
-name: Weekly Pipeline
+name: Quant Weekly Digest
 
 on:
   workflow_dispatch: {}
