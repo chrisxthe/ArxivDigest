@@ -34,14 +34,19 @@ def _scrape_page(url: str):
         paper_id   = dt.text.strip().split(" ")[2].split(":")[-1]
         main_page  = _ARXIV_BASE + paper_id
         pdf_link   = main_page.replace("abs", "pdf")
-        title      = dd.find("div", {"class": "list-title"}).text \
-                       .replace("Title:", "").strip()
-        authors    = dd.find("div", {"class": "list-authors"}).text \
-                       .replace("Authors:", "").replace("\n", "").strip()
-        subjects   = dd.find("div", {"class": "list-subjects"}).text \
-                       .replace("Subjects:", "").strip()
-        abstract   = dd.find("p", {"class": "mathjax"}).text \
-                       .replace("\n", " ").strip()
+
+        title_div   = dd.find("div", {"class": "list-title"})
+        authors_div = dd.find("div", {"class": "list-authors"})
+        subject_div = dd.find("div", {"class": "list-subjects"})
+        abs_par     = dd.find("p",   {"class": "mathjax"})
+        
+        title    = (title_div.get_text(" ", strip=True)
+            .replace("Title:", "").strip()) if title_div else "No title found"
+        authors  = (authors_div.get_text(" ", strip=True)
+            .replace("Authors:", "").strip()) if authors_div else "Unknown"
+        subjects = (subject_div.get_text(" ", strip=True)
+            .replace("Subjects:", "").strip()) if subject_div else ""
+        abstract = abs_par.get_text(" ", strip=True) if abs_par else ""
 
         # submission date appears in the comment line, e.g. "(submitted 3 Jul 2024)"
         comment = dd.find("div", {"class": "list-comments"})
