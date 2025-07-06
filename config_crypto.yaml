@@ -1,0 +1,15 @@
+# -------- ArxivDigest configuration --------
+topic: "Quantitative Finance"
+
+lookback_days: 7
+category_filter_enabled: true
+threshold: 6          # crypto space is smaller; loosen a bit
+
+categories:
+  - "Statistical Finance"
+  - "Trading and Market Microstructure"
+
+interest: |
+  **Primary** – Microstructure, price discovery and liquidity in cryptocurrency markets  
+  **Secondary** – Cross-asset spill-overs, stable-coin mechanics, DeFi risk  
+  Exclude pure-theory tokenomics with no empirical evidence.
