@@ -20,6 +20,11 @@ jobs:
       contents: read
 
     steps:
+    - name: Sanity-check env
+      run: echo "Key length is ${#OPENAI_API_KEY}"
+      env:
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    
     - uses: actions/checkout@v2
 
     - name: Set up Python 3.8
