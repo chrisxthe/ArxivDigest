@@ -315,6 +315,9 @@ def generate_body(topic, categories, interest, threshold):
 
 
 if __name__ == "__main__":
+    
+    global CATEGORY_FILTER_ENABLED, LOOKBACK_DAYS
+
     load_dotenv()
 
     parser = argparse.ArgumentParser()
@@ -326,7 +329,6 @@ if __name__ == "__main__":
         cfg = yaml.safe_load(f)
     
     # override globals from the YAML 
-    global CATEGORY_FILTER_ENABLED, LOOKBACK_DAYS
     CATEGORY_FILTER_ENABLED = cfg.get("category_filter_enabled", CATEGORY_FILTER_ENABLED)
     LOOKBACK_DAYS           = cfg.get("lookback_days", LOOKBACK_DAYS)
     
