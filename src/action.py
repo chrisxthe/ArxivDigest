@@ -1,35 +1,49 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Generate a personalised arXiv digest and (optionally) e-mail it.
+
+Tunable options:
+    CATEGORY_FILTER_ENABLED – True  → enforce `categories` from config.yaml
+                                  and look back `LOOKBACK_DAYS` instead of 1.
+                               False → ignore `categories` completely.
+    LOOKBACK_DAYS           – How many days of arXiv history to pull when
+                               the category filter is enabled.
+"""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# GLOBAL TOGGLE & SETTINGS
+# ──────────────────────────────────────────────────────────────────────────────
+CATEGORY_FILTER_ENABLED = True        # ← flip to False to disable the filter
+LOOKBACK_DAYS           = 7           # used only when the filter is ON
+# ──────────────────────────────────────────────────────────────────────────────
+
+from datetime import date
+import argparse, yaml, os, sys, time, traceback
+from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email, To, Content
 
-from datetime import date
-
-import argparse
-import yaml
-import os
-from dotenv import load_dotenv
 import openai
 from relevancy import generate_relevance_score, process_subject_fields
 from download_new_papers import get_papers
 
-import os, openai, sys, traceback, time
-
+# ── Sanity-check: key must be in env ──────────────────────────────────────────
 print("DEBUG: env key len =", len(os.getenv("OPENAI_API_KEY", "")), file=sys.stderr)
-openai.api_key = os.getenv("OPENAI_API_KEY")  # ensure it’s set here too
+openai.api_key = os.getenv("OPENAI_API_KEY", "")
 print("DEBUG: openai.api_key len =", len(openai.api_key or ""), file=sys.stderr)
 
 try:
-    start = time.time()
-    openai.Model.list()          # light ping – works on 0.x and 1.x
-    print("DEBUG: ping OK (%.2fs)" % (time.time() - start), file=sys.stderr)
+    t0 = time.time()
+    openai.Model.list()            # light ping
+    print(f"DEBUG: ping OK ({time.time() - t0:.2f}s)", file=sys.stderr)
 except Exception as e:
     print("DEBUG: ping FAILED:", e, file=sys.stderr)
     traceback.print_exc()
     sys.exit(1)
 
-# Hackathon quality code. Don't judge too harshly.
-# Feel free to submit pull requests to improve the code.
-
-topics = {
+# ── Topic → arXiv abbreviation maps (unchanged) ──────────────────────────────
+topics = {  # …
     "Physics": "",
     "Mathematics": "math",
     "Computer Science": "cs",
@@ -234,8 +248,9 @@ category_map = {
     "Economics": ["Econometrics", "General Economics", "Theoretical Economics"],
 }
 
-
 def generate_body(topic, categories, interest, threshold):
+    """Fetch papers → optional category filter → GPT scoring → HTML body."""
+    # 1) Resolve arXiv abbreviation -------------------------------------------
     if topic == "Physics":
         raise RuntimeError("You must choose a physics subtopic.")
     elif topic in physics_topics:
@@ -244,84 +259,94 @@ def generate_body(topic, categories, interest, threshold):
         abbr = topics[topic]
     else:
         raise RuntimeError(f"Invalid topic {topic}")
-    if categories:
-        for category in categories:
-            if category not in category_map[topic]:
-                raise RuntimeError(f"{category} is not a category of {topic}")
-        papers = get_papers(abbr)
+
+    # 2) Fetch recent papers ---------------------------------------------------
+    lookback = LOOKBACK_DAYS if CATEGORY_FILTER_ENABLED else 1
+    papers   = get_papers(abbr, days=lookback)  # get_papers must accept 'days'
+    print(f"DEBUG: fetched {len(papers)} papers from last {lookback} day(s)",
+          file=sys.stderr)
+
+    # 3) Optional category filter ---------------------------------------------
+    if CATEGORY_FILTER_ENABLED and categories:
+        invalid = [c for c in categories if c not in category_map[topic]]
+        if invalid:
+            raise RuntimeError(f"{invalid} not valid for topic {topic}")
+
         papers = [
-            t
-            for t in papers
-            if bool(set(process_subject_fields(t["subjects"])) & set(categories))
+            p for p in papers
+            if set(process_subject_fields(p["subjects"])) & set(categories)
         ]
-    else:
-        papers = get_papers(abbr)
+        print("DEBUG: after category filter ->", len(papers), "papers",
+              file=sys.stderr)
+
+    # 4) Bail out early if nothing left ---------------------------------------
+    if not papers:
+        raise RuntimeError("No papers matched the current settings.")
+
+    # 5) GPT relevance scoring -------------------------------------------------
     if interest:
-        relevancy, hallucination = generate_relevance_score(
+        papers = generate_relevance_score(
             papers,
             query={"interest": interest},
             threshold_score=threshold,
             num_paper_in_prompt=16,
         )
-        body = "<br><br>".join(
-            [
-                f'Title: <a href="{paper["main_page"]}">{paper["title"]}</a><br>Authors: {paper["authors"]}<br>Score: {paper["Relevancy score"]}<br>Reason: {paper["Reasons for match"]}'
-                for paper in relevancy
-            ]
-        )
-        if hallucination:
-            body = (
-                "Warning: the model hallucinated some papers. We have tried to remove them, but the scores may not be accurate.<br><br>"
-                + body
-            )
-    else:
-        body = "<br><br>".join(
-            [
-                f'Title: <a href="{paper["main_page"]}">{paper["title"]}</a><br>Authors: {paper["authors"]}'
-                for paper in papers
-            ]
-        )
+        print("DEBUG: after GPT filter ->", len(papers), "papers",
+              file=sys.stderr)
+
+    # 6) Build HTML ------------------------------------------------------------
+    body = "<br><br>".join(
+        f'Title: <a href="{p["main_page"]}">{p["title"]}</a>'
+        f'<br>Authors: {p["authors"]}'
+        + (f'<br>Score: {p.get("Relevancy score","")}'
+           f'<br>Reason: {p.get("Reasons for match","")}' if interest else "")
+        for p in papers
+    )
     return body
 
 
+# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    # Load the .env file.
     load_dotenv()
+
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config", help="yaml config file to use", default="config.yaml"
-    )
+    parser.add_argument("--config", default="config.yaml",
+                        help="YAML config file to use")
     args = parser.parse_args()
+
     with open(args.config, "r") as f:
-        config = yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
 
+    # Ensure key present after dotenv reload ----------------------------------
     if "OPENAI_API_KEY" not in os.environ:
-        raise RuntimeError("No openai api key found")
-    openai.api_key = os.environ.get("OPENAI_API_KEY")
+        raise RuntimeError("No OPENAI_API_KEY in environment")
 
-    topic = config["topic"]
-    categories = config["categories"]
-    from_email = os.environ.get("FROM_EMAIL")
-    to_email = os.environ.get("TO_EMAIL")
-    threshold = config["threshold"]
-    interest = config["interest"]
+    topic      = cfg["topic"]
+    categories = cfg["categories"]
+    threshold  = cfg["threshold"]
+    interest   = cfg["interest"]
+
     body = generate_body(topic, categories, interest, threshold)
-    with open("digest.html", "w") as f:
-        f.write(body)
-    if os.environ.get("SENDGRID_API_KEY", None):
-        sg = SendGridAPIClient(api_key=os.environ.get("SENDGRID_API_KEY"))
-        from_email = Email(from_email)  # Change to your verified sender
-        to_email = To(to_email)
-        subject = date.today().strftime("Personalized arXiv Digest, %d %b %Y")
-        content = Content("text/html", body)
-        mail = Mail(from_email, to_email, subject, content)
-        mail_json = mail.get()
 
-        # Send an HTTP POST request to /mail/send
-        response = sg.client.mail.send.post(request_body=mail_json)
-        if response.status_code >= 200 and response.status_code <= 300:
-            print("Send test email: Success!")
+    # Write digest -------------------------------------------------------------
+    with open("digest.html", "w") as fh:
+        fh.write(body)
+    print("DEBUG: wrote digest.html (%d bytes)" % os.path.getsize("digest.html"),
+          file=sys.stderr)
+
+    # Optional e-mail via SendGrid --------------------------------------------
+    if os.getenv("SENDGRID_API_KEY"):
+        sg          = SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
+        from_email  = Email(os.getenv("FROM_EMAIL"))
+        to_email    = To(os.getenv("TO_EMAIL"))
+        subject     = date.today().strftime("Personalized arXiv Digest, %d %b %Y")
+        content     = Content("text/html", body)
+        mail_json   = Mail(from_email, to_email, subject, content).get()
+
+        resp = sg.client.mail.send.post(request_body=mail_json)
+        if 200 <= resp.status_code < 300:
+            print("SendGrid email sent ✓")
         else:
-            print("Send test email: Failure ({response.status_code}, {response.text})")
+            print(f"SendGrid error {resp.status_code}: {resp.text}")
     else:
-        print("No sendgrid api key found. Skipping email")
+        print("No SENDGRID_API_KEY – skipping e-mail")
