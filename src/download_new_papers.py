@@ -75,7 +75,7 @@ def _load_jsonl(fname: str):
         return [json.loads(line) for line in f]
 
 # ──────────────────────────────────────────────────────────────────────────────
-def get_papers(field_abbr: str, days: int = 1, limit: int | None = None):
+def get_papers(field_abbr: str, days: int = 1, limit: Optional[int] = None):
     """
     Return a list of arXiv papers for `field_abbr`.
 
