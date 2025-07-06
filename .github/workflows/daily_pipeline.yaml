@@ -7,8 +7,8 @@ name: Daily pipeline
 on:
   workflow_dispatch: {}
   schedule:
-    # 15:00 UTC (23:00 CST) on weekdays
-    - cron:  '0 15 * * 1-5'
+    # 09:00 CST Monday  ==> 01:00 UTC Monday
+    - cron:  '0 1 * * 1'
 
 jobs:
   generate_and_send_digest:
