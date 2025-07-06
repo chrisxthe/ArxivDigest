@@ -46,7 +46,17 @@ def _scrape_page(url: str):
             .replace("Authors:", "").strip()) if authors_div else "Unknown"
         subjects = (subject_div.get_text(" ", strip=True)
             .replace("Subjects:", "").strip()) if subject_div else ""
-        abstract = abs_par.get_text(" ", strip=True) if abs_par else ""
+        if abs_par:
+            abstract = abs_par.get_text(" ", strip=True)
+        else:
+            # fetch JSON from arXiv API for the abstract
+            api_json = urllib.request.urlopen(
+                f'https://export.arxiv.org/api/query?id_list={paper_id}&max_results=1'
+            ).read().decode()
+            # naive extract; good enough for fallback
+            import re, html
+            m = re.search(r'<summary>(.*?)</summary>', api_json, re.S)
+            abstract = html.unescape(m.group(1).strip()) if m else ""
 
         # submission date appears in the comment line, e.g. "(submitted 3 Jul 2024)"
         comment = dd.find("div", {"class": "list-comments"})
