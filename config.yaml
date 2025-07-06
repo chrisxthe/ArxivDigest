@@ -1,14 +1,16 @@
 # -------- ArxivDigest configuration --------
 topic: "Quantitative Finance"
 
+# Run-time knobs 
+lookback_days: 7            # how many recent days to pull from arXiv
+category_filter_enabled: true   # false ⇒ ignore the “categories” list
+threshold: 5                # min GPT relevance score to keep a paper
+
 # Sub-topics to include (natural-language names as shown on arXiv)
 categories:
   - "Portfolio Management"               # q-fin.PM  – mid/long-horizon trading & allocation
   - "Statistical Finance"                # q-fin.ST  – factor modelling, risk, forecasting
   - "Trading and Market Microstructure"  # q-fin.TR  – high-frequency order-book work
-
-# Papers scoring below this (1-10) are discarded.
-threshold: 7
 
 # Natural-language guidance for the LLM’s relevance judgement
 interest: |
