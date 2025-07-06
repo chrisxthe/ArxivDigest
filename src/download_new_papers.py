@@ -1,64 +1,120 @@
+# download_new_papers.py
 # encoding: utf-8
-import os
-import tqdm
+import os, json, datetime, pytz, urllib.request, tqdm
 from bs4 import BeautifulSoup as bs
-import urllib.request
-import json
-import datetime
-import pytz
 
+_DATA_DIR = "./data"
+_ARXIV_BASE = "https://arxiv.org/abs/"
 
-def _download_new_papers(field_abbr):
-    NEW_SUB_URL = f'https://arxiv.org/list/{field_abbr}/new'  # https://arxiv.org/list/cs/new
-    page = urllib.request.urlopen(NEW_SUB_URL)
-    soup = bs(page)
-    content = soup.body.find("div", {'id': 'content'})
+# ──────────────────────────────────────────────────────────────────────────────
+def _ensure_data_dir():
+    if not os.path.exists(_DATA_DIR):
+        os.makedirs(_DATA_DIR, exist_ok=True)
 
-    # find the first h3 element in content
-    h3 = content.find("h3").text   # e.g: New submissions for Wed, 10 May 23
-    date = h3.replace("New submissions for", "").strip()
+def _timestamp_ny():
+    return datetime.datetime.now(
+        tz=pytz.timezone("America/New_York")
+    ).date()  # returns YYYY-MM-DD
+
+# ──────────────────────────────────────────────────────────────────────────────
+def _scrape_page(url: str):
+    page = urllib.request.urlopen(url)
+    soup = bs(page, "html.parser")
+    content = soup.body.find("div", {"id": "content"})
 
     dt_list = content.dl.find_all("dt")
     dd_list = content.dl.find_all("dd")
-    arxiv_base = "https://arxiv.org/abs/"
-
     assert len(dt_list) == len(dd_list)
-    new_paper_list = []
+
+    papers = []
     for i in tqdm.tqdm(range(len(dt_list))):
-        paper = {}
-        paper_number = dt_list[i].text.strip().split(" ")[2].split(":")[-1]
-        paper['main_page'] = arxiv_base + paper_number
-        paper['pdf'] = arxiv_base.replace('abs', 'pdf') + paper_number
+        dt, dd = dt_list[i], dd_list[i]
 
-        paper['title'] = dd_list[i].find("div", {"class": "list-title mathjax"}).text.replace("Title: ", "").strip()
-        paper['authors'] = dd_list[i].find("div", {"class": "list-authors"}).text \
-                            .replace("Authors:\n", "").replace("\n", "").strip()
-        paper['subjects'] = dd_list[i].find("div", {"class": "list-subjects"}).text.replace("Subjects: ", "").strip()
-        paper['abstract'] = dd_list[i].find("p", {"class": "mathjax"}).text.replace("\n", " ").strip()
-        new_paper_list.append(paper)
+        paper_id   = dt.text.strip().split(" ")[2].split(":")[-1]
+        main_page  = _ARXIV_BASE + paper_id
+        pdf_link   = main_page.replace("abs", "pdf")
+        title      = dd.find("div", {"class": "list-title"}).text \
+                       .replace("Title:", "").strip()
+        authors    = dd.find("div", {"class": "list-authors"}).text \
+                       .replace("Authors:", "").replace("\n", "").strip()
+        subjects   = dd.find("div", {"class": "list-subjects"}).text \
+                       .replace("Subjects:", "").strip()
+        abstract   = dd.find("p", {"class": "mathjax"}).text \
+                       .replace("\n", " ").strip()
 
+        # submission date appears in the comment line, e.g. "(submitted 3 Jul 2024)"
+        comment = dd.find("div", {"class": "list-comments"})
+        if comment and "(submitted" in comment.text:
+            date_str = comment.text.split("(submitted")[1].split(")")[0].strip()
+            sub_date = datetime.datetime.strptime(date_str, "%d %b %Y").date()
+        else:
+            sub_date = _timestamp_ny()  # fallback to 'today' if missing
 
-    #  check if ./data exist, if not, create it
-    if not os.path.exists("./data"):
-        os.makedirs("./data")
+        papers.append(
+            dict(
+                id=paper_id,
+                main_page=main_page,
+                pdf=pdf_link,
+                title=title,
+                authors=authors,
+                subjects=subjects,
+                abstract=abstract,
+                submitted=sub_date.isoformat(),
+            )
+        )
+    return papers
 
-    # save new_paper_list to a jsonl file, with each line as the element of a dictionary
-    date = datetime.date.fromtimestamp(datetime.datetime.now(tz=pytz.timezone("America/New_York")).timestamp())
-    date = date.strftime("%a, %d %b %y")
-    with open(f"./data/{field_abbr}_{date}.jsonl", "w") as f:
-        for paper in new_paper_list:
-            f.write(json.dumps(paper) + "\n")
+# ──────────────────────────────────────────────────────────────────────────────
+def _save_jsonl(fname: str, items):
+    with open(fname, "w") as f:
+        for p in items:
+            f.write(json.dumps(p) + "\n")
 
+def _load_jsonl(fname: str):
+    with open(fname) as f:
+        return [json.loads(line) for line in f]
 
-def get_papers(field_abbr, limit=None):
-    date = datetime.date.fromtimestamp(datetime.datetime.now(tz=pytz.timezone("America/New_York")).timestamp())
-    date = date.strftime("%a, %d %b %y")
-    if not os.path.exists(f"./data/{field_abbr}_{date}.jsonl"):
-        _download_new_papers(field_abbr)
-    results = []
-    with open(f"./data/{field_abbr}_{date}.jsonl", "r") as f:
-        for i, line in enumerate(f.readlines()):
-            if limit and i == limit:
-                return results
-            results.append(json.loads(line))
-    return results
+# ──────────────────────────────────────────────────────────────────────────────
+def get_papers(field_abbr: str, days: int = 1, limit: int | None = None):
+    """
+    Return a list of arXiv papers for `field_abbr`.
+
+    Parameters
+    ----------
+    field_abbr : str
+        e.g. "q-fin" or "cs"
+    days : int, optional
+        1  → today's `/new` page (default, legacy behaviour)  
+        >1 → scrape `/pastweek` (up to 1000 items) and return only those
+              submitted in the last `days` 24-hour windows.
+    limit : int, optional
+        If provided, truncate the returned list to `limit` entries.
+    """
+    _ensure_data_dir()
+
+    today_str = _timestamp_ny().strftime("%Y-%m-%d")
+
+    # 1️⃣ decide which URL & cache file to use
+    if days == 1:
+        url  = f"https://arxiv.org/list/{field_abbr}/new"
+        fname = f"{_DATA_DIR}/{field_abbr}_{today_str}_new.jsonl"
+    else:
+        url  = f"https://arxiv.org/list/{field_abbr}/pastweek?show=1000"
+        fname = f"{_DATA_DIR}/{field_abbr}_{today_str}_pastweek.jsonl"
+
+    # 2️⃣ scrape if cache missing
+    if not os.path.exists(fname):
+        papers = _scrape_page(url)
+        _save_jsonl(fname, papers)
+
+    papers = _load_jsonl(fname)
+
+    # 3️⃣ filter by look-back window
+    if days > 1:
+        cutoff = _timestamp_ny() - datetime.timedelta(days=days)
+        papers = [p for p in papers if datetime.date.fromisoformat(p["submitted"]) >= cutoff]
+
+    if limit:
+        papers = papers[:limit]
+
+    return papers
