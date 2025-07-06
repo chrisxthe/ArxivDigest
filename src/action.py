@@ -308,8 +308,12 @@ def generate_body(topic, categories, interest, threshold):
                   if p.get("Relevancy score", 0) >= threshold]
 
         print("DEBUG after GPT filter →", len(papers), "papers", file=sys.stderr)
+    
+    # 5) Order results:   ↓ relevance, then A-Z title --------------------------
+    papers.sort(key=lambda p: (-p.get("Relevancy score", 0),
+                               p["title"].lower()))
 
-    # 5) Build HTML ------------------------------------------------------------
+    # 6) Build HTML ------------------------------------------------------------
     body = "<br><br>".join(
         (
             f'Title: <a href="{p["main_page"]}">{p["title"]}</a>'
