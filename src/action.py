@@ -1,46 +1,40 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Generate a personalised arXiv digest and (optionally) e-mail it.
+Generate a personalised arXiv digest.
 
-Tunable options:
-    CATEGORY_FILTER_ENABLED – True  → enforce `categories` from config.yaml
-                                  and look back `LOOKBACK_DAYS` instead of 1.
-                               False → ignore `categories` completely.
-    LOOKBACK_DAYS           – How many days of arXiv history to pull when
-                               the category filter is enabled.
+The *defaults* below are over-ridden at runtime by values in ``config.yaml``:
+
+    lookback_days            – how many recent days to pull from arXiv  
+    category_filter_enabled  – True ⇒ apply ``categories`` list; False ⇒ ignore  
+    threshold                – min GPT relevance score (1-10) to keep a paper
 """
 
-# ──────────────────────────────────────────────────────────────────────────────
-# GLOBAL TOGGLE & SETTINGS
-# ──────────────────────────────────────────────────────────────────────────────
-CATEGORY_FILTER_ENABLED = True        # ← flip to False to disable the filter
-LOOKBACK_DAYS           = 7           # used only when the filter is ON
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────── defaults ────────────────────────────────────────
+CATEGORY_FILTER_ENABLED = True      # will be replaced by YAML if present
+LOOKBACK_DAYS           = 7
+# ─────────────────────────────────────────────────────────────────────────────
 
 from datetime import date
-import argparse, yaml, os, sys, time, traceback
+import os, sys, time, traceback, argparse, yaml
 from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail, Email, To, Content
-
 import openai
+
 from relevancy import generate_relevance_score, process_subject_fields
 from download_new_papers import get_papers
 
-# Sanity-check: key must be in env 
-print("DEBUG: env key len =", len(os.getenv("OPENAI_API_KEY", "")), file=sys.stderr)
+# ─── quick sanity-check for the key ──────────────────────────────────────────
+print("DEBUG env key len =", len(os.getenv("OPENAI_API_KEY", "")), file=sys.stderr)
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
-print("DEBUG: openai.api_key len =", len(openai.api_key or ""), file=sys.stderr)
-
+print("DEBUG openai.api_key len =", len(openai.api_key or ""), file=sys.stderr)
 try:
-    t0 = time.time()
-    openai.Model.list()            # light ping
-    print(f"DEBUG: ping OK ({time.time() - t0:.2f}s)", file=sys.stderr)
+    t0 = time.time(); openai.Model.list()
+    print(f"DEBUG ping OK ({time.time()-t0:.2f}s)", file=sys.stderr)
 except Exception as e:
-    print("DEBUG: ping FAILED:", e, file=sys.stderr)
-    traceback.print_exc()
-    sys.exit(1)
+    traceback.print_exc(); sys.exit(1)
+
 
 # Topic → arXiv abbreviation maps (unchanged) 
 topics = {  # …
@@ -249,61 +243,64 @@ category_map = {
 }
 
 def generate_body(topic, categories, interest, threshold):
-    """Fetch papers → optional category filter → GPT scoring → HTML body."""
-    # 1) Resolve arXiv abbreviation 
+    """Fetch → dedup → (opt) filter → GPT score → HTML."""
+    # 1) arXiv abbreviation ----------------------------------------------------
     if topic == "Physics":
         raise RuntimeError("You must choose a physics subtopic.")
-    elif topic in physics_topics:
-        abbr = physics_topics[topic]
-    elif topic in topics:
-        abbr = topics[topic]
-    else:
+    abbr = physics_topics.get(topic) or topics.get(topic)
+    if not abbr:
         raise RuntimeError(f"Invalid topic {topic}")
 
-    # 2) Fetch recent papers 
+    # 2) get papers + dedup ----------------------------------------------------
     lookback = LOOKBACK_DAYS if CATEGORY_FILTER_ENABLED else 1
-    papers   = get_papers(abbr, days=lookback)  # get_papers must accept 'days'
-    print(f"DEBUG: fetched {len(papers)} papers from last {lookback} day(s)",
+    papers   = get_papers(abbr, days=lookback)
+    uniq = {}
+    for p in papers:
+        uniq.setdefault(p["id"], p)        # keep first occurrence
+    papers = list(uniq.values())
+    print(f"DEBUG fetched {len(papers)} unique from last {lookback}d",
           file=sys.stderr)
 
-    # 3) Optional category filter 
+    # 3) category filter -------------------------------------------------------
     if CATEGORY_FILTER_ENABLED and categories:
         invalid = [c for c in categories if c not in category_map[topic]]
         if invalid:
             raise RuntimeError(f"{invalid} not valid for topic {topic}")
+        papers = [p for p in papers
+                  if set(process_subject_fields(p["subjects"])) & set(categories)]
+        print("DEBUG after category filter →", len(papers), file=sys.stderr)
 
-        papers = [
-            p for p in papers
-            if set(process_subject_fields(p["subjects"])) & set(categories)
-        ]
-        print("DEBUG: after category filter ->", len(papers), "papers",
-              file=sys.stderr)
-
-    # 4) Bail out early if nothing left 
     if not papers:
-        raise RuntimeError("No papers matched the current settings.")
+        raise RuntimeError("No papers matched current settings.")
 
-    # 5) GPT relevance scoring 
+    # 4) GPT relevance scoring -------------------------------------------------
     if interest:
-        ranked, hallucination = generate_relevance_score(
+        ranked, _ = generate_relevance_score(
             papers,
             query={"interest": interest},
             threshold_score=threshold,
             num_paper_in_prompt=16,
         )
-    
-        # `ranked` holds only {"Relevancy score", "Reasons for match"}
-        # so stitch those metrics back onto the full paper objects:
+
+        # robust merge – prefer matching by id if model echoed it
         scored = []
-        for full, extra in zip(papers, ranked):
-            if extra.get("Relevancy score", 0) >= threshold:
-                full.update(extra)          # add the two keys
-                scored.append(full)
-    
+        if ranked and isinstance(ranked[0], dict) and "id" in ranked[0]:
+            by_id = {p["id"]: p for p in papers}
+            for extra in ranked:
+                pid   = extra["id"]
+                score = extra.get("Relevancy score", 0)
+                if pid in by_id and score >= threshold:
+                    by_id[pid].update(extra); scored.append(by_id[pid])
+        else:  # fallback: positional merge
+            for full, extra in zip(papers, ranked):
+                score = extra.get("Relevancy score", 0)
+                if score >= threshold:
+                    full.update(extra); scored.append(full)
+
         papers = scored
         print("DEBUG after GPT filter →", len(papers), file=sys.stderr)
 
-    # 6) Build HTML 
+    # 5) HTML ------------------------------------------------------------------
     body = "<br><br>".join(
         f'Title: <a href="{p["main_page"]}">{p["title"]}</a>'
         f'<br>Authors: {p["authors"]}'
@@ -314,25 +311,21 @@ def generate_body(topic, categories, interest, threshold):
     return body
 
 
+# ─── CLI entry-point ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    
     load_dotenv()
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config.yaml",
-                        help="YAML config file to use")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="config.yaml")
+    args = ap.parse_args()
 
-    with open(args.config, "r") as f:
-        cfg = yaml.safe_load(f)
-    
-    # override globals from the YAML 
-    CATEGORY_FILTER_ENABLED = cfg.get("category_filter_enabled", CATEGORY_FILTER_ENABLED)
+    with open(args.config) as fh:
+        cfg = yaml.safe_load(fh)
+
+    # override global defaults from YAML
+    CATEGORY_FILTER_ENABLED = cfg.get("category_filter_enabled",
+                                      CATEGORY_FILTER_ENABLED)
     LOOKBACK_DAYS           = cfg.get("lookback_days", LOOKBACK_DAYS)
-    
-    # Ensure key present after dotenv reload 
-    if "OPENAI_API_KEY" not in os.environ:
-        raise RuntimeError("No OPENAI_API_KEY in environment")
 
     topic      = cfg["topic"]
     categories = cfg["categories"]
@@ -341,25 +334,21 @@ if __name__ == "__main__":
 
     body = generate_body(topic, categories, interest, threshold)
 
-    # Write digest 
     with open("digest.html", "w") as fh:
         fh.write(body)
-    print("DEBUG: wrote digest.html (%d bytes)" % os.path.getsize("digest.html"),
-          file=sys.stderr)
+    print("DEBUG wrote digest.html (%d bytes)"
+          % os.path.getsize("digest.html"), file=sys.stderr)
 
-    # Optional e-mail via SendGrid 
+    # optional e-mail via SendGrid --------------------------------------------
     if os.getenv("SENDGRID_API_KEY"):
-        sg          = SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
-        from_email  = Email(os.getenv("FROM_EMAIL"))
-        to_email    = To(os.getenv("TO_EMAIL"))
-        subject     = date.today().strftime("Personalized arXiv Digest, %d %b %Y")
-        content     = Content("text/html", body)
-        mail_json   = Mail(from_email, to_email, subject, content).get()
-
-        resp = sg.client.mail.send.post(request_body=mail_json)
-        if 200 <= resp.status_code < 300:
-            print("SendGrid email sent ✓")
-        else:
-            print(f"SendGrid error {resp.status_code}: {resp.text}")
+        sg   = SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
+        mail = Mail(
+            Email(os.getenv("FROM_EMAIL")),
+            To(os.getenv("TO_EMAIL")),
+            date.today().strftime("Personalized arXiv Digest, %d %b %Y"),
+            Content("text/html", body),
+        )
+        resp = sg.client.mail.send.post(request_body=mail.get())
+        print("SendGrid status", resp.status_code)
     else:
         print("No SENDGRID_API_KEY – skipping e-mail")
