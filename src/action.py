@@ -291,8 +291,17 @@ def generate_body(topic, categories, interest, threshold):
             threshold_score=threshold,
             num_paper_in_prompt=16,
         )
-        papers = ranked
-        print("DEBUG: after GPT filter ->", len(papers), "papers", file=sys.stderr)
+    
+        # `ranked` holds only {"Relevancy score", "Reasons for match"}
+        # so stitch those metrics back onto the full paper objects:
+        scored = []
+        for full, extra in zip(papers, ranked):
+            if extra.get("Relevancy score", 0) >= threshold:
+                full.update(extra)          # add the two keys
+                scored.append(full)
+    
+        papers = scored
+        print("DEBUG after GPT filter →", len(papers), file=sys.stderr)
 
     # 6) Build HTML ------------------------------------------------------------
     body = "<br><br>".join(
