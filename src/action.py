@@ -316,8 +316,6 @@ def generate_body(topic, categories, interest, threshold):
 
 if __name__ == "__main__":
     
-    global CATEGORY_FILTER_ENABLED, LOOKBACK_DAYS
-
     load_dotenv()
 
     parser = argparse.ArgumentParser()
