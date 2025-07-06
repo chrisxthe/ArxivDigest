@@ -3,6 +3,7 @@
 import os, json, datetime, pytz, urllib.request, tqdm
 from bs4 import BeautifulSoup as bs
 from typing import Optional
+import re, html, urllib.request, xml.etree.ElementTree as ET
 
 _DATA_DIR = "./data"
 _ARXIV_BASE = "https://arxiv.org/abs/"
@@ -28,44 +29,37 @@ def _scrape_page(url: str):
     assert len(dt_list) == len(dd_list)
 
     papers = []
+
     for i in tqdm.tqdm(range(len(dt_list))):
         dt, dd = dt_list[i], dd_list[i]
-
-        paper_id   = dt.text.strip().split(" ")[2].split(":")[-1]
-        main_page  = _ARXIV_BASE + paper_id
-        pdf_link   = main_page.replace("abs", "pdf")
-
+    
+        # 1️⃣ robust ID & URL
+        abs_a = dt.find("a", attrs={"title": "Abstract"})
+        paper_id  = abs_a["href"].split("/")[-1]          # 2407.01234
+        main_page = "https://arxiv.org" + abs_a["href"]   # full /abs/ URL
+        pdf_link  = main_page.replace("abs", "pdf")
+    
+        # 2️⃣ core metadata from list page
         title_div   = dd.find("div", {"class": "list-title"})
         authors_div = dd.find("div", {"class": "list-authors"})
         subject_div = dd.find("div", {"class": "list-subjects"})
-        abs_par     = dd.find("p",   {"class": "mathjax"})
-        
-        title    = (title_div.get_text(" ", strip=True)
-            .replace("Title:", "").strip()) if title_div else "No title found"
-        authors  = (authors_div.get_text(" ", strip=True)
-            .replace("Authors:", "").strip()) if authors_div else "Unknown"
-        subjects = (subject_div.get_text(" ", strip=True)
-            .replace("Subjects:", "").strip()) if subject_div else ""
+        title    = title_div.get_text(" ", strip=True).replace("Title:", "").strip()
+        authors  = authors_div.get_text(" ", strip=True).replace("Authors:", "").strip()
+        subjects = subject_div.get_text(" ", strip=True).replace("Subjects:", "").strip()
+    
+        # 3️⃣ abstract: first try list page, else pull from API
+        abs_par = dd.find("p", {"class": "mathjax"})
         if abs_par:
             abstract = abs_par.get_text(" ", strip=True)
         else:
-            # fetch JSON from arXiv API for the abstract
-            api_json = urllib.request.urlopen(
-                f'https://export.arxiv.org/api/query?id_list={paper_id}&max_results=1'
-            ).read().decode()
-            # naive extract; good enough for fallback
-            import re, html
-            m = re.search(r'<summary>(.*?)</summary>', api_json, re.S)
+            api_url  = f'https://export.arxiv.org/api/query?id_list={paper_id}&max_results=1'
+            api_xml  = urllib.request.urlopen(api_url).read().decode()
+            m = re.search(r'<summary>(.*?)</summary>', api_xml, re.S)
             abstract = html.unescape(m.group(1).strip()) if m else ""
-
-        # submission date appears in the comment line, e.g. "(submitted 3 Jul 2024)"
-        comment = dd.find("div", {"class": "list-comments"})
-        if comment and "(submitted" in comment.text:
-            date_str = comment.text.split("(submitted")[1].split(")")[0].strip()
-            sub_date = datetime.datetime.strptime(date_str, "%d %b %Y").date()
-        else:
-            sub_date = _timestamp_ny()  # fallback to 'today' if missing
-
+    
+        # 4️⃣ submission date (leave as before) …
+        # ------------------------------------------------------------------------
+    
         papers.append(
             dict(
                 id=paper_id,
