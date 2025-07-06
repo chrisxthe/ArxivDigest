@@ -11,6 +11,20 @@ import openai
 from relevancy import generate_relevance_score, process_subject_fields
 from download_new_papers import get_papers
 
+import os, openai, sys, traceback, time
+
+print("DEBUG: env key len =", len(os.getenv("OPENAI_API_KEY", "")), file=sys.stderr)
+openai.api_key = os.getenv("OPENAI_API_KEY")  # ensure it’s set here too
+print("DEBUG: openai.api_key len =", len(openai.api_key or ""), file=sys.stderr)
+
+try:
+    start = time.time()
+    openai.Model.list()          # light ping – works on 0.x and 1.x
+    print("DEBUG: ping OK (%.2fs)" % (time.time() - start), file=sys.stderr)
+except Exception as e:
+    print("DEBUG: ping FAILED:", e, file=sys.stderr)
+    traceback.print_exc()
+    sys.exit(1)
 
 # Hackathon quality code. Don't judge too harshly.
 # Feel free to submit pull requests to improve the code.
