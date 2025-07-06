@@ -2,6 +2,7 @@
 # encoding: utf-8
 import os, json, datetime, pytz, urllib.request, tqdm
 from bs4 import BeautifulSoup as bs
+from typing import Optional
 
 _DATA_DIR = "./data"
 _ARXIV_BASE = "https://arxiv.org/abs/"
