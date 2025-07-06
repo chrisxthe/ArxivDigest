@@ -272,7 +272,7 @@ def generate_body(topic, categories, interest, threshold):
 
     if not papers:
         raise RuntimeError("No papers matched current settings.")
-
+    
     # 4) GPT relevance scoring -------------------------------------------------
     if interest:
         ranked, _ = generate_relevance_score(
@@ -282,23 +282,19 @@ def generate_body(topic, categories, interest, threshold):
             num_paper_in_prompt=16,
         )
 
-        # robust merge – prefer matching by id if model echoed it
-        scored = []
-        if ranked and isinstance(ranked[0], dict) and "id" in ranked[0]:
-            by_id = {p["id"]: p for p in papers}
-            for extra in ranked:
-                pid   = extra["id"]
-                score = extra.get("Relevancy score", 0)
-                if pid in by_id and score >= threshold:
-                    by_id[pid].update(extra); scored.append(by_id[pid])
-        else:  # fallback: positional merge
-            for full, extra in zip(papers, ranked):
-                score = extra.get("Relevancy score", 0)
-                if score >= threshold:
-                    full.update(extra); scored.append(full)
+        by_id = {p["id"]: p for p in papers}
+        for extra in ranked:
+            pid   = extra.get("id")
+            try:
+                score = int(extra.get("Relevancy score", 0))
+            except ValueError:             # defensive: not an int?
+                score = float(extra.get("Relevancy score", 0))
 
-        papers = scored
-        print("DEBUG after GPT filter →", len(papers), file=sys.stderr)
+            if pid in by_id and score >= threshold:
+                by_id[pid].update(extra)
+
+        papers = list(by_id.values())          # keep all ≧ threshold
+        print("DEBUG after GPT filter →", len(papers), "papers", file=sys.stderr)
 
     # 5) HTML ------------------------------------------------------------------
     body = "<br><br>".join(
