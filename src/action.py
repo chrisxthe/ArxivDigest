@@ -282,26 +282,42 @@ def generate_body(topic, categories, interest, threshold):
             num_paper_in_prompt=16,
         )
 
+        # dict[id] -> full paper
         by_id = {p["id"]: p for p in papers}
+
+        # attach GPT metrics to matching papers
         for extra in ranked:
-            pid   = extra.get("id")
+            pid   = extra.get("id")                     # echoed by LLM
+            score = extra.get("Relevancy score", 0)
             try:
-                score = int(extra.get("Relevancy score", 0))
-            except ValueError:             # defensive: not an int?
-                score = float(extra.get("Relevancy score", 0))
+                score_num = int(score)
+            except (ValueError, TypeError):
+                try:
+                    score_num = int(float(score))
+                except Exception:
+                    score_num = 0
 
-            if pid in by_id and score >= threshold:
-                by_id[pid].update(extra)
+            if pid in by_id and score_num >= threshold:
+                by_id[pid].update(
+                    {"Relevancy score": score_num,
+                     "Reasons for match": extra.get("Reasons for match", "")}
+                )
 
-        papers = list(by_id.values())          # keep all ≧ threshold
+        # keep only those papers that now carry a score ≥ threshold
+        papers = [p for p in by_id.values()
+                  if p.get("Relevancy score", 0) >= threshold]
+
         print("DEBUG after GPT filter →", len(papers), "papers", file=sys.stderr)
 
-    # 5) HTML ------------------------------------------------------------------
+    # 5) Build HTML ------------------------------------------------------------
     body = "<br><br>".join(
-        f'Title: <a href="{p["main_page"]}">{p["title"]}</a>'
-        f'<br>Authors: {p["authors"]}'
-        + (f'<br>Score: {p.get("Relevancy score","")}'
-           f'<br>Reason: {p.get("Reasons for match","")}' if interest else "")
+        (
+            f'Title: <a href="{p["main_page"]}">{p["title"]}</a>'
+            f'<br>Authors: {p["authors"]}'
+            f'<br>Score: {p.get("Relevancy score","")}'
+            f'<br>Reason: {p.get("Reasons for match","")}'
+            f'<br>Abstract: {p["abstract"]}'
+        )
         for p in papers
     )
     return body
