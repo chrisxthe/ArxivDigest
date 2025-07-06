@@ -3,7 +3,7 @@ topic: "Quantitative Finance"
 
 lookback_days: 7
 category_filter_enabled: true
-threshold: 6          # crypto space is smaller; loosen a bit
+threshold: 5          # crypto space is smaller; loosen a bit
 
 categories:
   - "Statistical Finance"
