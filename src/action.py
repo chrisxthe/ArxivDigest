@@ -28,7 +28,7 @@ import openai
 from relevancy import generate_relevance_score, process_subject_fields
 from download_new_papers import get_papers
 
-# ── Sanity-check: key must be in env ──────────────────────────────────────────
+# Sanity-check: key must be in env 
 print("DEBUG: env key len =", len(os.getenv("OPENAI_API_KEY", "")), file=sys.stderr)
 openai.api_key = os.getenv("OPENAI_API_KEY", "")
 print("DEBUG: openai.api_key len =", len(openai.api_key or ""), file=sys.stderr)
@@ -42,7 +42,7 @@ except Exception as e:
     traceback.print_exc()
     sys.exit(1)
 
-# ── Topic → arXiv abbreviation maps (unchanged) ──────────────────────────────
+# Topic → arXiv abbreviation maps (unchanged) 
 topics = {  # …
     "Physics": "",
     "Mathematics": "math",
@@ -250,7 +250,7 @@ category_map = {
 
 def generate_body(topic, categories, interest, threshold):
     """Fetch papers → optional category filter → GPT scoring → HTML body."""
-    # 1) Resolve arXiv abbreviation -------------------------------------------
+    # 1) Resolve arXiv abbreviation 
     if topic == "Physics":
         raise RuntimeError("You must choose a physics subtopic.")
     elif topic in physics_topics:
@@ -260,13 +260,13 @@ def generate_body(topic, categories, interest, threshold):
     else:
         raise RuntimeError(f"Invalid topic {topic}")
 
-    # 2) Fetch recent papers ---------------------------------------------------
+    # 2) Fetch recent papers 
     lookback = LOOKBACK_DAYS if CATEGORY_FILTER_ENABLED else 1
     papers   = get_papers(abbr, days=lookback)  # get_papers must accept 'days'
     print(f"DEBUG: fetched {len(papers)} papers from last {lookback} day(s)",
           file=sys.stderr)
 
-    # 3) Optional category filter ---------------------------------------------
+    # 3) Optional category filter 
     if CATEGORY_FILTER_ENABLED and categories:
         invalid = [c for c in categories if c not in category_map[topic]]
         if invalid:
@@ -279,11 +279,11 @@ def generate_body(topic, categories, interest, threshold):
         print("DEBUG: after category filter ->", len(papers), "papers",
               file=sys.stderr)
 
-    # 4) Bail out early if nothing left ---------------------------------------
+    # 4) Bail out early if nothing left 
     if not papers:
         raise RuntimeError("No papers matched the current settings.")
 
-    # 5) GPT relevance scoring -------------------------------------------------
+    # 5) GPT relevance scoring 
     if interest:
         ranked, hallucination = generate_relevance_score(
             papers,
@@ -303,7 +303,7 @@ def generate_body(topic, categories, interest, threshold):
         papers = scored
         print("DEBUG after GPT filter →", len(papers), file=sys.stderr)
 
-    # 6) Build HTML ------------------------------------------------------------
+    # 6) Build HTML 
     body = "<br><br>".join(
         f'Title: <a href="{p["main_page"]}">{p["title"]}</a>'
         f'<br>Authors: {p["authors"]}'
@@ -314,7 +314,6 @@ def generate_body(topic, categories, interest, threshold):
     return body
 
 
-# ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     load_dotenv()
 
@@ -325,8 +324,13 @@ if __name__ == "__main__":
 
     with open(args.config, "r") as f:
         cfg = yaml.safe_load(f)
-
-    # Ensure key present after dotenv reload ----------------------------------
+    
+    # override globals from the YAML 
+    global CATEGORY_FILTER_ENABLED, LOOKBACK_DAYS
+    CATEGORY_FILTER_ENABLED = cfg.get("category_filter_enabled", CATEGORY_FILTER_ENABLED)
+    LOOKBACK_DAYS           = cfg.get("lookback_days", LOOKBACK_DAYS)
+    
+    # Ensure key present after dotenv reload 
     if "OPENAI_API_KEY" not in os.environ:
         raise RuntimeError("No OPENAI_API_KEY in environment")
 
@@ -337,13 +341,13 @@ if __name__ == "__main__":
 
     body = generate_body(topic, categories, interest, threshold)
 
-    # Write digest -------------------------------------------------------------
+    # Write digest 
     with open("digest.html", "w") as fh:
         fh.write(body)
     print("DEBUG: wrote digest.html (%d bytes)" % os.path.getsize("digest.html"),
           file=sys.stderr)
 
-    # Optional e-mail via SendGrid --------------------------------------------
+    # Optional e-mail via SendGrid 
     if os.getenv("SENDGRID_API_KEY"):
         sg          = SendGridAPIClient(api_key=os.getenv("SENDGRID_API_KEY"))
         from_email  = Email(os.getenv("FROM_EMAIL"))
