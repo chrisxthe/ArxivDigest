@@ -285,14 +285,14 @@ def generate_body(topic, categories, interest, threshold):
 
     # 5) GPT relevance scoring -------------------------------------------------
     if interest:
-        papers = generate_relevance_score(
+        ranked, hallucination = generate_relevance_score(
             papers,
             query={"interest": interest},
             threshold_score=threshold,
             num_paper_in_prompt=16,
         )
-        print("DEBUG: after GPT filter ->", len(papers), "papers",
-              file=sys.stderr)
+        papers = ranked
+        print("DEBUG: after GPT filter ->", len(papers), "papers", file=sys.stderr)
 
     # 6) Build HTML ------------------------------------------------------------
     body = "<br><br>".join(
