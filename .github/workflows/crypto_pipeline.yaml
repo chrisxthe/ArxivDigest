@@ -27,5 +27,5 @@ jobs:
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: crypto_digest.html
+          name: digest.html
           path: crypto_digest.html
